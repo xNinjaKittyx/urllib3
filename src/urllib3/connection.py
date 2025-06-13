@@ -1,10 +1,13 @@
 from __future__ import absolute_import
 
 import datetime
+import http
+import http.client
 import logging
 import os
 import re
 import socket
+import sys
 import warnings
 from socket import error as SocketError
 from socket import timeout as SocketTimeout
@@ -192,6 +195,52 @@ class HTTPConnection(_HTTPConnection, object):
     def _is_using_tunnel(self):
         # Google App Engine's httplib does not define _tunnel_host
         return getattr(self, "_tunnel_host", None)
+
+    if sys.version_info < (3, 12, 3) and not sys.version_info > (3, 11, 8):
+        # Taken from python/cpython#100986 which was backported in 3.11.9 and 3.12.3.
+        # When using connection_from_host, host will come without brackets.
+        def _wrap_ipv6(self, ip: bytes) -> bytes:
+            if b":" in ip and ip[0] != b"["[0]:
+                return b"[" + ip + b"]"
+            return ip
+
+        def _tunnel(self) -> None:
+            _MAXLINE = http.client._MAXLINE  # type: ignore[attr-defined]
+            connect = b"CONNECT %s:%d HTTP/1.0\r\n" % (  # type: ignore[str-format]
+                self._wrap_ipv6(self._tunnel_host.encode("ascii")),  # type: ignore[union-attr]
+                self._tunnel_port,
+            )
+            headers = [connect]
+            for header, value in self._tunnel_headers.items():  # type: ignore[attr-defined]
+                headers.append(f"{header}: {value}\r\n".encode("latin-1"))
+            headers.append(b"\r\n")
+            # Making a single send() call instead of one per line encourages
+            # the host OS to use a more optimal packet size instead of
+            # potentially emitting a series of small packets.
+            self.send(b"".join(headers))
+            del headers
+
+            response = self.response_class(self.sock, method=self._method)  # type: ignore[attr-defined]
+            try:
+                (version, code, message) = response._read_status()  # type: ignore[attr-defined]
+
+                if code != http.HTTPStatus.OK:
+                    self.close()
+                    raise OSError(f"Tunnel connection failed: {code} {message.strip()}")
+                while True:
+                    line = response.fp.readline(_MAXLINE + 1)
+                    if len(line) > _MAXLINE:
+                        raise http.client.LineTooLong("header line")
+                    if not line:
+                        # for sites which EOF without sending a trailer
+                        break
+                    if line in (b"\r\n", b"\n", b""):
+                        break
+
+                    if self.debuglevel > 0:
+                        print("header:", line.decode())
+            finally:
+                response.close()
 
     def _prepare_conn(self, conn):
         self.sock = conn

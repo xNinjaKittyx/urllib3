@@ -1,5 +1,7 @@
 # TODO: Break this module up into pieces. Maybe group by functionality tested
 # rather than the socket level-ness of it.
+from urllib.parse import urlparse
+
 from dummyserver.server import (
     DEFAULT_CA,
     DEFAULT_CERTS,
@@ -1147,7 +1149,7 @@ class TestProxyManager(SocketDummyServerTestCase):
             r = conn.urlopen("GET", url, retries=0)
             assert r.status == 200
 
-    def test_connect_ipv6_addr(self):
+    def test_connect_ipv6_addr_from_host(self):
         ipv6_addr = "2001:4998:c:a06::2:4008"
 
         def echo_socket_handler(listener):
@@ -1187,12 +1189,21 @@ class TestProxyManager(SocketDummyServerTestCase):
 
         with proxy_from_url(base_url, cert_reqs="NONE") as proxy:
             url = "https://[{0}]".format(ipv6_addr)
-            conn = proxy.connection_from_url(url)
+            # Try with connection_from_host
+            parsed_request_url = urlparse(url)
+
+            conn = proxy.connection_from_host(
+                scheme=parsed_request_url.scheme.lower(),
+                host=parsed_request_url.hostname,
+                port=parsed_request_url.port,
+            )
             try:
                 r = conn.urlopen("GET", url, retries=0)
                 assert r.status == 200
             except MaxRetryError:
-                self.fail("Invalid IPv6 format in HTTP CONNECT request")
+                pytest.fail(
+                    "Invalid IPv6 format in HTTP CONNECT request when using connection_from_host"
+                )
 
     @pytest.mark.parametrize("target_scheme", ["http", "https"])
     def test_https_proxymanager_connected_to_http_proxy(self, target_scheme):
