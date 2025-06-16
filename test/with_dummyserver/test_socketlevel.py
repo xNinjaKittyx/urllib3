@@ -13,6 +13,7 @@ from urllib3 import HTTPConnectionPool, HTTPSConnectionPool, ProxyManager, util
 from urllib3._collections import HTTPHeaderDict
 from urllib3.connection import HTTPConnection, _get_default_user_agent
 from urllib3.exceptions import (
+    InsecureRequestWarning,
     MaxRetryError,
     ProtocolError,
     ProxyError,
@@ -1198,7 +1199,8 @@ class TestProxyManager(SocketDummyServerTestCase):
                 port=parsed_request_url.port,
             )
             try:
-                r = conn.urlopen("GET", url, retries=0)
+                with pytest.warns(InsecureRequestWarning):
+                    r = conn.urlopen("GET", url, retries=0)
                 assert r.status == 200
             except MaxRetryError:
                 pytest.fail(
